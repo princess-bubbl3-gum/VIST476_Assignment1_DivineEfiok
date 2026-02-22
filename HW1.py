@@ -1,164 +1,153 @@
 import pandas as pd
-import calendar
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-# -----------------------------
-# Load data
-# -----------------------------
-df = pd.read_csv("temperature_daily.csv", parse_dates=["date"])
-
+# =========================
+# 1. LOAD DATA
+# =========================
+df = pd.read_csv("temperature_daily.csv")
+df["date"] = pd.to_datetime(df["date"])
 df["year"] = df["date"].dt.year
 df["month"] = df["date"].dt.month
 df["day"] = df["date"].dt.day
 
-# using the last 10 years
+# =========================
+# 2. FILTER LAST 10 YEARS
+# =========================
 last_year = df["year"].max()
-df = df[df["year"] >= last_year - 9]
+start_year = last_year - 9
+df = df[df["year"] >= start_year]
 
-years = sorted(df["year"].unique())
-months = list(range(1, 13))
-
-# monthly summaries
-monthly_max = df.groupby(["year", "month"])["max_temperature"].max().unstack()
-monthly_min = df.groupby(["year", "month"])["min_temperature"].min().unstack()
-
-GLOBAL_MIN = df["min_temperature"].min()
-GLOBAL_MAX = df["max_temperature"].max()
-
-# -----------------------------
-# Create subplot matrix
-# -----------------------------
-fig = make_subplots(
-    rows=12,
-    cols=len(years),
-    horizontal_spacing=0.002,
-    vertical_spacing=0.01,
-    row_titles=[calendar.month_abbr[m] for m in months],  # Short month labels to p
-    column_titles=[str(y) for y in years],
+# =========================
+# 3. BUILD MONTHLY CELLS
+# =========================
+monthly = (
+    df.groupby(["year", "month"])
+        .agg(
+            avg_temp=("max_temperature", "mean"),
+            max_series=("max_temperature", list),
+            min_series=("min_temperature", list),
+            day_series=("day", list)
+        )
+        .reset_index()
 )
 
-max_visibility = []
-min_visibility = []
+# =========================
+# 4. HEATMAP MATRIX
+# =========================
+heat = monthly.pivot(index="month", columns="year", values="avg_temp")
+years = list(heat.columns)
+months = list(heat.index)
 
-# -----------------------------
-# Populate cells
-# -----------------------------
-for r, month in enumerate(months):
-    for c, year in enumerate(years):
+# =========================
+# 5. CREATE FIGURE
+# =========================
+fig = go.Figure()
 
-        max_val = monthly_max.loc[year, month]
-        min_val = monthly_min.loc[year, month]
+fig.add_trace(
+    go.Heatmap(
+        z=heat.values,
+        x=years,
+        y=months,
+        colorscale="RdYlBu_r",
+        colorbar_title="Avg Temp"
+    )
+)
 
-        daily = df[(df.year == year) & (df.month == month)]
+# =========================
+# 6. MINI LINES WITH DAY/TEMP HOVER
+# =========================
+max_traces = []
+min_traces = []
 
-        # ========= MAX MODE =========
+for _, row in monthly.iterrows():
+    days = row["day_series"]
 
-        heat_max = go.Heatmap(
-            z=[[max_val]],
-            zmin=GLOBAL_MIN,
-            zmax=GLOBAL_MAX,
-            colorscale="YlOrRd",
-            showscale=(r == 0 and c == len(years) - 1),  # show legend once
-            hovertemplate=(
-                f"Year: {year}<br>"
-                f"Month: {calendar.month_name[month]}<br>"
-                f"Monthly Max: {max_val:.1f}°C<extra></extra>"
-            ),
-            visible=True,
-        )
+    # Max temperatures
+    temps = row["max_series"]
+    tmin, tmax = min(temps), max(temps)
+    x_offset = [d/31 for d in days]
+    x_vals = [row["year"] + o*0.8 - 0.4 for o in x_offset]
+    y_offset = [(t-tmin)/(tmax-tmin+1e-6) for t in temps]
+    y_vals = [row["month"] + o*0.8 - 0.4 for o in y_offset]
 
-        line_max = go.Scatter(
-            x=daily["day"],
-            y=daily["max_temperature"],
-            mode="lines",
-            line=dict(color="cyan", width=1.5),
-            showlegend=False,
-            hovertemplate=(
-                f"Date: {year}-{month:02d}-%{{x}}<br>"
-                "Max Temp: %{y:.1f}°C<extra></extra>"
-            ),
-            visible=True,
-        )
+    hover_text = [f"{row['year']}-{row['month']:02d}-{d:02d}: {t}°C" for d, t in zip(days, temps)]
 
-        # ========= MIN MODE =========
+    max_traces.append(go.Scatter(
+        x=x_vals, y=y_vals, mode="lines",
+        line=dict(width=1, color="orange"),
+        showlegend=False, visible=True,
+        hoverinfo="text", hovertext=hover_text
+    ))
 
-        heat_min = go.Heatmap(
-            z=[[min_val]],
-            zmin=GLOBAL_MIN,
-            zmax=GLOBAL_MAX,
-            colorscale="YlOrRd",
-            showscale=False,
-            hovertemplate=(
-                f"Year: {year}<br>"
-                f"Month: {calendar.month_name[month]}<br>"
-                f"Monthly Min: {min_val:.1f}°C<extra></extra>"
-            ),
-            visible=False,
-        )
+    # Min temperatures
+    temps = row["min_series"]
+    tmin, tmax = min(temps), max(temps)
+    y_offset = [(t-tmin)/(tmax-tmin+1e-6) for t in temps]
+    y_vals = [row["month"] + o*0.8 - 0.4 for o in y_offset]
 
-        line_min = go.Scatter(
-            x=daily["day"],
-            y=daily["min_temperature"],
-            mode="lines",
-            line=dict(color="cyan", width=1.5),
-            showlegend=False,
-            hovertemplate=(
-                f"Date: {year}-{month:02d}-%{{x}}<br>"
-                "Min Temp: %{y:.1f}°C<extra></extra>"
-            ),
-            visible=False,
-        )
+    hover_text = [f"{row['year']}-{row['month']:02d}-{d:02d}: {t}°C" for d, t in zip(days, temps)]
 
-        # adding traces
-        fig.add_trace(heat_max, row=r + 1, col=c + 1)
-        fig.add_trace(line_max, row=r + 1, col=c + 1)
-        fig.add_trace(heat_min, row=r + 1, col=c + 1)
-        fig.add_trace(line_min, row=r + 1, col=c + 1)
+    min_traces.append(go.Scatter(
+        x=x_vals, y=y_vals, mode="lines",
+        line=dict(width=1, color="cyan"),
+        showlegend=False, visible=False,
+        hoverinfo="text", hovertext=hover_text
+    ))
 
-        # Track visibility for toggle
-        max_visibility += [True, True, False, False]
-        min_visibility += [False, False, True, True]
+for t in max_traces + min_traces:
+    fig.add_trace(t)
 
-fig.update_xaxes(visible=False)
-fig.update_yaxes(visible=False)
+# =========================
+# 7. YEAR TITLES
+# =========================
+annotations = [dict(x=y, y=13.5, text=str(y), showarrow=False, font=dict(size=14)) for y in years]
 
-# -----------------------------
-# Layout + Toggle Buttons
-# -----------------------------
+# =========================
+# 8. TOGGLE BUTTON ATTACHED TO TITLE
+# =========================
+n = len(max_traces)
+visibility_max = [True]+[True]*n+[False]*n
+visibility_min = [True]+[False]*n+[True]*n
+
 fig.update_layout(
-    title="Hong Kong Monthly Temperature Matrix",
-    height=1000,
-    width=1400,
-
-    #prevents label overlap & cell distortion
-    margin=dict(l=90, r=20, t=80, b=20),
-
-    updatemenus=[
-        dict(
-            type="buttons",
-            direction="right",
-            x=0.5,
-            y=1.08,
-            xanchor="center",
-            buttons=[
-                dict(
-                    label="Maximum Temperature",
-                    method="update",
-                    args=[{"visible": max_visibility}],
-                ),
-                dict(
-                    label="Minimum Temperature",
-                    method="update",
-                    args=[{"visible": min_visibility}],
-                ),
-            ],
-        )
-    ],
+    updatemenus=[dict(
+        buttons=[
+            dict(label="Max", method="update", args=[{"visible": visibility_max}]),
+            dict(label="Min", method="update", args=[{"visible": visibility_min}])
+        ],
+        direction="right",
+        x=0.5,          # start near center
+        y=1.05,         # slightly above the top of the figure canvas
+        xanchor='left', # anchor left side of button to this x
+        yanchor='middle',
+        pad=dict(l=10,b=0,t=0,r=0)
+    )]
 )
 
-# -----------------------------
-# Show + Save
-# -----------------------------
+# =========================
+# 9. TITLE + AXES
+# =========================
+fig.update_layout(
+    title=dict(
+        text="Monthly Average Temperatures (Last 10 Years)",
+        x=0.5, xanchor='center', y=0.85, yanchor='middle', font=dict(size=20)
+    ),
+    xaxis_title="Year",
+    yaxis_title="Month",
+    yaxis=dict(
+        tickmode="array",
+        tickvals=list(range(1,13)),
+        ticktext=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    ),
+    height=750,
+    annotations=annotations
+)
+
+# =========================
+# 10. SHIFT FIGURE DOWN
+# =========================
+fig.update_layout(
+    margin=dict(t=180, b=80, l=80, r=80)
+)
+
 fig.show()
-fig.write_html("matrix_view.html")
